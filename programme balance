@@ -1,0 +1,595 @@
+// Bibliothèques utilisées   
+
+ 
+
+#include "HX711.h"    
+
+#include "Arduino.h"   
+
+#include "WiFi.h"    
+
+#include "esp_wpa2.h" // Libraire wpa2 pour se connecter au réseau d'une entreprise   
+
+#include "PubSubClient.h"   
+
+ 
+
+  
+
+ 
+
+// HX711 circuit wiring   
+
+ 
+
+  
+
+ 
+
+const int LOADCELL_DOUT_PIN = 21;   
+
+const int LOADCELL_SCK_PIN = 22;   
+
+const int Calibration_Weight = 100;   
+
+ 
+
+ 
+
+HX711 scale; // scale = nom du capteur   
+
+ 
+
+  
+
+//SSID   
+
+ 
+
+const char* ssid = "eduroam";    
+
+ 
+
+// Déclaration - Grandeur physique étudiée (A COMPLETER)   
+
+ 
+
+  
+
+float weight;    
+
+float reading; // déclaration de la variable dans laquelle se trouve la chaine de caractère à envoyer (ligne 131)   
+
+float incertitude_classee = 0 ;   
+
+float incertitude_etalonnee = 0; 
+
+ 
+
+  
+
+// Paramètres MQTT Broker (A COMPLETER)   
+
+ 
+
+ 
+
+const char *mqtt_broker = "172.23.238.55"; // Identifiant du broker (Adresse IP)   
+
+ 
+
+const char *topic_masse = "Masse"; // Nom du topic sur lequel les données seront envoyés.    
+
+const char *topic_Uclassee = "incertitude classée";// nom du topic sur lequel est envoyé l'incertitude classée 
+
+const char *topic_Uetalonne = "incertitude étalonnée"; // nom du topic sur lequel est envoyé l'incertitude étalonnée   
+
+ 
+
+const char *mqtt_username = ""; // Identifiant dans le cas d'une liaison sécurisée   
+
+ 
+
+const char *mqtt_password = ""; // Mdp dans le cas d'une liaison sécurisée   
+
+ 
+
+const int mqtt_port = 1883; // Port : 1883 dans le cas d'une liaison non sécurisée et 8883 dans le cas d'une liaison cryptée   
+
+ 
+
+  
+
+ 
+
+WiFiClient espClient;    
+
+ 
+
+PubSubClient client(espClient);    
+
+ 
+
+ 
+
+// Paramètres EDUROAM    
+
+ 
+
+  
+
+#define EAP_IDENTITY "manel.chekired@etu.univ-amu.fr"   
+
+ 
+
+#define EAP_PASSWORD "Chekiredmanel22juin2003!"    
+
+ 
+
+#define EAP_USERNAME "manel.chekired@etu.univ-amu.fr"    
+
+ 
+
+  
+
+ 
+
+#define CONNECTION_TIMEOUT 10   
+
+ 
+
+ 
+
+int timeout_counter = 0;   
+
+ 
+
+ 
+
+// Fonction permettant de récupérer les informations associées au réseau. On les affiche sur le moniteur série   
+
+ 
+
+ 
+
+void get_network_info(){   
+
+ 
+
+    if(WiFi.status() == WL_CONNECTED) {   
+
+ 
+
+        Serial.print("[*] Informations - SSID : ");   
+
+ 
+
+        Serial.println(ssid);   
+
+ 
+
+        Serial.println((String)"[+] RSSI : " + WiFi.RSSI() + " dB");   
+
+ 
+
+    }   
+
+ 
+
+}   
+
+ 
+
+  
+
+ 
+
+// Fonction réception du message MQTT    
+
+ 
+
+  
+
+ 
+
+void callback(char *topic, byte *payload, unsigned int length) {    
+
+ 
+
+  Serial.print("Le message a été envoyé sur le topic : ");    
+
+ 
+
+  Serial.println(topic);    
+
+ 
+
+  Serial.print("Message:");    
+
+ 
+
+  for (int i = 0; i < length; i++) {    
+
+ 
+
+    Serial.print((char) payload[i]);    
+
+ 
+
+  }    
+
+ 
+
+  Serial.println();    
+
+ 
+
+  Serial.println("-----------------------");    
+
+ 
+
+}   
+
+ 
+
+ 
+
+  
+
+ 
+
+void setup() {   
+
+ 
+
+  Serial.begin(9600);   
+
+ 
+
+  delay(10); // début programme wifi   
+
+ 
+
+  Serial.print(F("Connexion au réseau : "));   
+
+ 
+
+  Serial.println(ssid);   
+
+ 
+
+  WiFi.disconnect(true); //connexion eduroam   
+
+ 
+
+  delay(500);   
+
+ 
+
+  WiFi.begin(ssid, WPA2_AUTH_PEAP, EAP_IDENTITY, EAP_USERNAME, EAP_PASSWORD);   
+
+ 
+
+  delay(500);   
+
+ 
+
+  
+
+  
+
+ 
+
+    while(WiFi.status() != WL_CONNECTED){   
+
+ 
+
+        Serial.print(".");   
+
+ 
+
+        delay(200);   
+
+ 
+
+        timeout_counter++;   
+
+ 
+
+        if(timeout_counter >= CONNECTION_TIMEOUT*5){   
+
+ 
+
+          ESP.restart();   
+
+ 
+
+        }   
+
+ 
+
+    }   
+
+ 
+
+  
+
+ 
+
+  Serial.println(""); // programme calibration   
+
+ 
+
+  Serial.println(F("Connecté au réseau WiFi."));   
+
+ 
+
+  get_network_info();   
+
+ 
+
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);   
+
+ 
+
+  delay (500);   
+
+ 
+
+  scale.set_scale();   
+
+ 
+
+  scale.tare();   
+
+ 
+
+  Serial.println("Calibration");   
+
+ 
+
+  Serial.println("Put a known weight on the scale");   
+
+ 
+
+  delay(5000);   
+
+ 
+
+  
+
+ 
+
+  float x = scale.get_units(10);   
+
+ 
+
+  x = x / Calibration_Weight;   
+
+ 
+
+  scale.set_scale(x);   
+
+ 
+
+  Serial.println("Calibration finished...");   
+
+ 
+
+  delay(3000);   
+
+ 
+
+  
+
+ 
+
+ 
+
+  // Connexion au broker MQTT     
+
+ 
+
+  
+
+ 
+
+ 
+
+  client.setServer(mqtt_broker, mqtt_port);    
+
+ 
+
+  client.setCallback(callback);    
+
+ 
+
+  
+
+ 
+
+  while (!client.connected()) {    
+
+ 
+
+    String client_id = "esp32-client-";    
+
+ 
+
+    client_id += String(WiFi.macAddress());    
+
+ 
+
+    Serial.printf("La chaîne de mesure %s se connecte au broker MQTT", client_id.c_str());    
+
+ 
+
+    
+
+ 
+
+  
+
+ 
+
+    if (client.connect(client_id.c_str(), mqtt_username, mqtt_password)) {    
+
+ 
+
+      Serial.println("La chaîne de mesure est connectée au broker.");    
+
+ 
+
+  
+
+ 
+
+    } else {    
+
+ 
+
+      Serial.print("La chaîne de mesure n'a pas réussi à se connecter ... ");    
+
+ 
+
+      Serial.print(client.state());    
+
+ 
+
+      delay(2000);    
+
+ 
+
+    }    
+
+ 
+
+  }    
+
+ 
+
+}    
+
+ 
+
+ 
+
+  
+
+ 
+
+void loop() {   
+
+ 
+
+  if (scale.is_ready()) {   
+
+ 
+
+    reading = scale.get_units(10); // si le capteur est prêt on associe a la variable reading cette chaine de caractère (fait une moyenne de 10 mesures)   
+
+ 
+
+    Serial.print("HX711 reading: ");   
+
+ 
+
+    Serial.println(reading);   
+
+ 
+
+  
+
+  // affiche l'incertitude classée 
+
+ 
+
+    if (reading >= 0 && reading <=1000 ) { // si la masse est comprise entre 0 et 1000g 
+
+ 
+
+      incertitude_classee = 0.02 ;  // l'incertitude est de 0.02 
+
+ 
+
+      Serial.print("incertitude_classee : "); // afficher sur le moniteur serie   
+
+ 
+
+      Serial.println(incertitude_classee);   
+
+ 
+
+      client.publish(topic_Uclassee,String(incertitude_classee).c_str());   
+
+ 
+
+    }  
+
+     
+
+    // incertitude étalonnée 
+
+ 
+
+    if (reading >= 0 && reading <=1000 ) { // si la masse est comprise entre 0 et 1000g 
+
+ 
+
+      incertitude_etalonnee = 0.14 ;  // l'incertitude est de 0.14 
+
+ 
+
+      Serial.print("incertitude_etalonnee : "); // afficher sur le moniteur serie   
+
+ 
+
+      Serial.println(incertitude_etalonnee);   
+
+ 
+
+      client.publish(topic_Uetalonne,String(incertitude_etalonnee).c_str());   
+
+ 
+
+    } 
+
+ 
+
+  
+
+ 
+
+  } else {   
+
+ 
+
+    Serial.println("HX711 not found.");   
+
+ 
+
+    }   
+
+ 
+
+  
+
+ 
+
+  client.publish(topic_masse,String(reading).c_str()); // sert a envoyé la chaine de caractère sur node red   
+
+ 
+
+  client.publish(topic_Uclassee,String(incertitude_classee).c_str());   
+
+ 
+
+  delay(1000);   
+
+ 
+
+  
+
+ 
+
+} 
